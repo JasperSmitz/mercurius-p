@@ -17,3 +17,36 @@ pub struct ToolParameter {
     
     pub required: bool,
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_tool_definition() {
+        let json = r#"
+        {
+            "name": "echo",
+            "description": "Echo a message",
+            "command": "echo",
+            "arguments": ["{message}"],
+            "parameters": [
+                {
+                    "name": "message",
+                    "type": "string",
+                    "required": true
+                }
+            ],
+            "timeout": 5000
+        }
+        "#;
+
+        let tool: ToolDefinition = serde_json::from_str(json).unwrap();
+
+        assert_eq!(tool.name, "echo");
+        assert_eq!(tool.parameters.len(), 1);
+        assert_eq!(tool.parameters[0].parameter_type, "string");
+        assert!(tool.parameters[0].required);
+    }
+}
