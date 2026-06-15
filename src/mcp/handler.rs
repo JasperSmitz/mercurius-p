@@ -117,7 +117,7 @@ mod tests {
         };
 
         if let Some(response) = handle_request(request) {
-                panic!("Expected notification to be ignored, but got response: {response:?}");
+            panic!("Expected notification to be ignored, but got response: {response:?}");
         }
     }
 }
