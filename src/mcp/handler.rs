@@ -285,11 +285,8 @@ mod tests {
             params: None,
         };
 
-        match handler.handle_request(request) {
-            Some(response) => {
-                panic!("Expected notification to be ignored, but got response: {response:?}");
-            }
-            None => {}
+        if let Some(response) = handler.handle_request(request) {
+            panic!("Expected notification to be ignored, but got response: {response:?}");
         }
     }
 }
