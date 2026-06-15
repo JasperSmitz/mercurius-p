@@ -1,3 +1,4 @@
+pub mod command_builder;
 pub mod config;
 pub mod model;
 pub mod registry;
