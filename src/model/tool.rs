@@ -14,10 +14,9 @@ pub struct ToolParameter {
 
     #[serde(rename = "type")]
     pub parameter_type: String,
-    
+
     pub required: bool,
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -38,15 +37,23 @@ mod tests {
                     "required": true
                 }
             ],
-            "timeout": 5000
+            "timeout_ms": 5000
         }
         "#;
 
-        let tool: ToolDefinition = serde_json::from_str(json).unwrap();
+        let tool_result: Result<ToolDefinition, serde_json::Error> = serde_json::from_str(json);
 
-        assert_eq!(tool.name, "echo");
-        assert_eq!(tool.parameters.len(), 1);
-        assert_eq!(tool.parameters[0].parameter_type, "string");
-        assert!(tool.parameters[0].required);
+        match tool_result {
+            Ok(tool) => {
+                assert_eq!(tool.name, "echo");
+                assert_eq!(tool.parameters.len(), 1);
+                assert_eq!(tool.parameters[0].parameter_type, "string");
+                assert!(tool.parameters[0].required);
+                assert_eq!(tool.timeout_ms, 5000);
+            }
+            Err(error) => {
+                panic!("Expected tool definition to deserialize successfully, but got: {error}");
+            }
+        }
     }
 }
