@@ -1,0 +1,18 @@
+[
+  {
+    "name": "echo",
+    "description": "Echo a message",
+    "command": "echo",
+    "arguments": [
+      "{message}"
+    ],
+    "parameters": [
+      {
+        "name": "message",
+        "type": "string",
+        "required": true
+      }
+    ],
+    "timeout_ms": 5000
+  }
+]
