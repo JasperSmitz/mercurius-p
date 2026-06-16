@@ -139,6 +139,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ needs.bump.outputs.tag }}" "${{ matrix.asset_name }}" \
-            --repo "${{ github.repository }}" \
-            --clobber
+          gh release upload "${{ needs.bump.outputs.tag }}" "${{ matrix.asset_name }}" --repo "${{ github.repository }}" --clobber
