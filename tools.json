@@ -14,5 +14,13 @@
       }
     ],
     "timeout_ms": 5000
+  },
+  {
+    "name": "rustc-version",
+    "description": "Print the installed Rust compiler version",
+    "command": "rustc",
+    "arguments": ["--version"],
+    "parameters": [],
+    "timeout_ms": 5000
   }
 ]
