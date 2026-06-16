@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
@@ -9,11 +10,15 @@ use crate::service::ToolExecutionService;
 #[derive(Debug, Clone)]
 pub struct McpHandler {
     service: ToolExecutionService,
+    config_path: PathBuf,
 }
 
 impl McpHandler {
-    pub fn new(service: ToolExecutionService) -> Self {
-        Self { service }
+    pub fn new(service: ToolExecutionService, config_path: impl Into<PathBuf>) -> Self {
+        Self {
+            service,
+            config_path: config_path.into(),
+        }
     }
 
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
@@ -36,6 +41,8 @@ impl McpHandler {
             "initialize" => self.handle_initialize(id),
             "tools/list" => self.handle_tools_list(id),
             "tools/call" => self.handle_tools_call(id, params).await,
+            "resources/list" => self.handle_resources_list(id),
+            "resources/read" => self.handle_resources_read(id, params),
             _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
         }
     }
@@ -46,12 +53,69 @@ impl McpHandler {
             json!({
                 "protocolVersion": "2025-06-18",
                 "capabilities": {
-                    "tools": {}
+                    "tools": {},
+                    "resources": {}
                 },
                 "serverInfo": {
                     "name": "mercurius-p",
                     "version": env!("CARGO_PKG_VERSION")
                 }
+            }),
+        )
+    }
+
+    fn handle_resources_list(&self, id: Value) -> JsonRpcResponse {
+        JsonRpcResponse::success(
+            Some(id),
+            json!({
+                "resources": [
+                    {
+                        "uri": "mercurius-p://tools/config",
+                        "name": "Tool configuration",
+                        "description": "The active mercurius-p tool configuration file",
+                        "mimeType": "application/json"
+                    }
+                ]
+            }),
+        )
+    }
+
+    fn handle_resources_read(&self, id: Value, params: Option<Value>) -> JsonRpcResponse {
+        let uri = match parse_resource_uri(params) {
+            Ok(uri) => uri,
+            Err(error) => {
+                return JsonRpcResponse::error(Some(id), -32602, error);
+            }
+        };
+
+        match uri.as_str() {
+            "mercurius-p://tools/config" => self.read_tools_config_resource(id),
+            _ => JsonRpcResponse::error(Some(id), -32602, format!("Unknown resource URI: {uri}")),
+        }
+    }
+
+    fn read_tools_config_resource(&self, id: Value) -> JsonRpcResponse {
+        let contents = match std::fs::read_to_string(&self.config_path) {
+            Ok(contents) => contents,
+            Err(error) => {
+                return JsonRpcResponse::error(
+                    Some(id),
+                    -32603,
+                    format!("Failed to read tool configuration resource: {error}"),
+                );
+            }
+        };
+
+        JsonRpcResponse::success(
+            Some(id),
+            json!({
+                "contents": [
+                    {
+                        "uri": "mercurius-p://tools/config",
+                        "mimeType": "application/json",
+                        "text": contents
+                    }
+                ]
             }),
         )
     }
@@ -96,6 +160,21 @@ impl McpHandler {
 struct ToolsCallParams {
     name: String,
     arguments: HashMap<String, String>,
+}
+
+fn parse_resource_uri(params: Option<Value>) -> Result<String, String> {
+    let params = match params {
+        Some(params) => params,
+        None => {
+            return Err("resources/read requires params".to_string());
+        }
+    };
+
+    match params.get("uri") {
+        Some(Value::String(uri)) if !uri.trim().is_empty() => Ok(uri.clone()),
+        Some(_) => Err("resources/read param 'uri' must be a non-empty string".to_string()),
+        None => Err("resources/read missing required param 'uri'".to_string()),
+    }
 }
 
 fn parse_tools_call_params(params: Option<Value>) -> Result<ToolsCallParams, String> {
@@ -269,7 +348,7 @@ mod tests {
         let registry = ToolRegistry::new(tools);
         let service = ToolExecutionService::new(registry);
 
-        McpHandler::new(service)
+        McpHandler::new(service, "tools.json")
     }
 
     fn initialize_request() -> JsonRpcRequest {
@@ -620,6 +699,136 @@ mod tests {
 
         if let Some(response) = handler.handle_request(request).await {
             panic!("Expected notification to be ignored, but got response: {response:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn handles_resources_list() {
+        let handler = handler_with_tools(vec![]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(9)),
+            method: "resources/list".to_string(),
+            params: None,
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert_eq!(response.id, Some(json!(9)));
+                assert!(response.error.is_none());
+
+                match response.result {
+                    Some(result) => {
+                        assert_eq!(result["resources"][0]["uri"], "mercurius-p://tools/config");
+                        assert_eq!(result["resources"][0]["mimeType"], "application/json");
+                    }
+                    None => {
+                        panic!("Expected resources/list response to contain result");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected resources/list request to produce a response");
+            }
+        }
+    }
+    #[tokio::test]
+    async fn handles_resources_read_for_tools_config() {
+        let handler = handler_with_tools(vec![]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(10)),
+            method: "resources/read".to_string(),
+            params: Some(json!({
+                "uri": "mercurius-p://tools/config"
+            })),
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert_eq!(response.id, Some(json!(10)));
+                assert!(response.error.is_none());
+
+                match response.result {
+                    Some(result) => {
+                        assert_eq!(result["contents"][0]["uri"], "mercurius-p://tools/config");
+                        assert_eq!(result["contents"][0]["mimeType"], "application/json");
+
+                        match result["contents"][0]["text"].as_str() {
+                            Some(text) => {
+                                assert!(text.contains("echo"));
+                            }
+                            None => {
+                                panic!("Expected resource text to be a string");
+                            }
+                        }
+                    }
+                    None => {
+                        panic!("Expected resources/read response to contain result");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected resources/read request to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn resources_read_returns_invalid_params_when_uri_missing() {
+        let handler = handler_with_tools(vec![]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(11)),
+            method: "resources/read".to_string(),
+            params: Some(json!({})),
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => match response.error {
+                Some(error) => {
+                    assert_eq!(error.code, -32602);
+                    assert!(error.message.contains("uri"));
+                }
+                None => {
+                    panic!("Expected missing resource URI to return error");
+                }
+            },
+            None => {
+                panic!("Expected resources/read request to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn resources_read_returns_invalid_params_for_unknown_uri() {
+        let handler = handler_with_tools(vec![]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(12)),
+            method: "resources/read".to_string(),
+            params: Some(json!({
+                "uri": "mercurius-p://unknown"
+            })),
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => match response.error {
+                Some(error) => {
+                    assert_eq!(error.code, -32602);
+                    assert!(error.message.contains("Unknown resource URI"));
+                }
+                None => {
+                    panic!("Expected unknown resource URI to return error");
+                }
+            },
+            None => {
+                panic!("Expected resources/read request to produce a response");
+            }
         }
     }
 }

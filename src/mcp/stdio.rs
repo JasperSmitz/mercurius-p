@@ -104,7 +104,7 @@ mod tests {
     fn test_server() -> McpStdioServer {
         let registry = ToolRegistry::new(vec![no_parameter_tool()]);
         let service = ToolExecutionService::new(registry);
-        let handler = McpHandler::new(service);
+        let handler = McpHandler::new(service, "tools.json");
 
         McpStdioServer::new(handler)
     }
