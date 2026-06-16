@@ -21,6 +21,10 @@ jobs:
     name: Bump Cargo version
     runs-on: ubuntu-latest
 
+    outputs:
+      version: ${{ steps.new.outputs.version }}
+      tag: v${{ steps.new.outputs.version }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,3 +62,83 @@ jobs:
           git tag "v${{ steps.new.outputs.version }}"
           git push
           git push origin "v${{ steps.new.outputs.version }}"
+
+  create-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs: bump
+
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.bump.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "mercurius-p ${{ needs.bump.outputs.tag }}" \
+            --generate-notes
+
+  build-binaries:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    needs:
+      - bump
+      - create-release
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            binary_name: mercurius-p
+            asset_name: mercurius-p-linux-x86_64.tar.gz
+
+          - name: macos-aarch64
+            os: macos-latest
+            binary_name: mercurius-p
+            asset_name: mercurius-p-macos-aarch64.tar.gz
+
+          - name: windows-x86_64
+            os: windows-latest
+            binary_name: mercurius-p.exe
+            asset_name: mercurius-p-windows-x86_64.zip
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        run: |
+          mkdir dist
+          cp target/release/${{ matrix.binary_name }} dist/
+          cp README.md dist/ || true
+          cp tools.json dist/ || true
+          tar -czf ${{ matrix.asset_name }} -C dist .
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/release/${{ matrix.binary_name }} dist/
+          if (Test-Path README.md) { Copy-Item README.md dist/ }
+          if (Test-Path tools.json) { Copy-Item tools.json dist/ }
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.asset_name }}
+
+      - name: Upload binary to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ needs.bump.outputs.tag }}" "${{ matrix.asset_name }}" \
+            --repo "${{ github.repository }}" \
+            --clobber
