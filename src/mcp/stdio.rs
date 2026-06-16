@@ -206,12 +206,10 @@ mod tests {
                     Ok(value) => {
                         assert_eq!(value["jsonrpc"], "2.0");
                         assert_eq!(value["error"]["code"], -32700);
-                        assert!(
-                            value["error"]["message"]
-                                .as_str()
-                                .map(|message| message.contains("Parse error"))
-                                .unwrap_or(false)
-                        );
+                        assert!(value["error"]["message"]
+                            .as_str()
+                            .map(|message| message.contains("Parse error"))
+                            .unwrap_or(false));
                     }
                     Err(error) => {
                         panic!("Expected parse error response to be valid JSON, but got: {error}");
