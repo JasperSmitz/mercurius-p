@@ -30,21 +30,18 @@ impl McpStdioServer {
                 }
             };
 
-            match self.handle_line(&line).await {
-                Some(response_line) => {
-                    if let Err(error) = stdout.write_all(response_line.as_bytes()).await {
-                        return Err(format!("Failed to write response to stdout: {error}"));
-                    }
-
-                    if let Err(error) = stdout.write_all(b"\n").await {
-                        return Err(format!("Failed to write newline to stdout: {error}"));
-                    }
-
-                    if let Err(error) = stdout.flush().await {
-                        return Err(format!("Failed to flush stdout: {error}"));
-                    }
+            if let Some(response_line) = self.handle_line(&line).await {
+                if let Err(error) = stdout.write_all(response_line.as_bytes()).await {
+                    return Err(format!("Failed to write response to stdout: {error}"));
                 }
-                None => {}
+
+                if let Err(error) = stdout.write_all(b"\n").await {
+                    return Err(format!("Failed to write newline to stdout: {error}"));
+                }
+
+                if let Err(error) = stdout.flush().await {
+                    return Err(format!("Failed to flush stdout: {error}"));
+                }
             }
         }
 
@@ -77,10 +74,7 @@ impl McpStdioServer {
                         format!("Failed to serialize response: {error}"),
                     );
 
-                    match serde_json::to_string(&fallback) {
-                        Ok(serialized_fallback) => Some(serialized_fallback),
-                        Err(_) => None,
-                    }
+                    serde_json::to_string(&fallback).ok()
                 }
             },
             None => None,
