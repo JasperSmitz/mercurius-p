@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod command_builder;
 pub mod config;
 pub mod executor;

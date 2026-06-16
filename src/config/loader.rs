@@ -18,17 +18,47 @@ mod tests {
 
     #[test]
     fn loads_tools_from_valid_json_file() {
-        let result = load_tools_from_file("tools.json");
+        let path = std::env::temp_dir().join(format!(
+            "mercurius_p_test_tools_{}.json",
+            std::process::id()
+        ));
 
-        match result {
+        let json = r#"
+        [
+            {
+                "name": "echo",
+                "description": "Echo a message",
+                "command": "echo",
+                "arguments": ["{message}"],
+                "parameters": [
+                    {
+                        "name": "message",
+                        "type": "string",
+                        "required": true
+                    }
+                ],
+                "timeout_ms": 5000
+            }
+        ]
+        "#;
+
+        if let Err(error) = std::fs::write(&path, json) {
+            panic!("Expected test config file to be written, but got: {error}");
+        }
+
+        match load_tools_from_file(&path) {
             Ok(tools) => {
                 assert_eq!(tools.len(), 1);
                 assert_eq!(tools[0].name, "echo");
                 assert_eq!(tools[0].parameters.len(), 1);
             }
             Err(error) => {
-                panic!("Expected tools.json to load successfully, but got: {error}");
+                panic!("Expected test config file to load successfully, but got: {error}");
             }
+        }
+
+        if let Err(error) = std::fs::remove_file(&path) {
+            panic!("Expected test config file to be removed, but got: {error}");
         }
     }
 
