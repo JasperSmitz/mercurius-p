@@ -1,29 +1,41 @@
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse};
-use crate::registry::ToolRegistry;
+use crate::model::ExecutionResult;
+use crate::service::ToolExecutionService;
 
 #[derive(Debug, Clone)]
 pub struct McpHandler {
-    registry: ToolRegistry,
+    service: ToolExecutionService,
 }
 
 impl McpHandler {
-    pub fn new(registry: ToolRegistry) -> Self {
-        Self { registry }
+    pub fn new(service: ToolExecutionService) -> Self {
+        Self { service }
     }
 
-    pub fn handle_request(&self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
+    pub async fn handle_request(&self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         match request.id {
-            Some(id) => Some(self.handle_method(id, &request.method)),
+            Some(id) => Some(
+                self.handle_method(id, &request.method, request.params)
+                    .await,
+            ),
             None => None,
         }
     }
 
-    fn handle_method(&self, id: Value, method: &str) -> JsonRpcResponse {
+    async fn handle_method(
+        &self,
+        id: Value,
+        method: &str,
+        params: Option<Value>,
+    ) -> JsonRpcResponse {
         match method {
             "initialize" => self.handle_initialize(id),
             "tools/list" => self.handle_tools_list(id),
+            "tools/call" => self.handle_tools_call(id, params).await,
             _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
         }
     }
@@ -46,7 +58,8 @@ impl McpHandler {
 
     fn handle_tools_list(&self, id: Value) -> JsonRpcResponse {
         let tools = self
-            .registry
+            .service
+            .registry()
             .list_tools()
             .into_iter()
             .map(tool_to_mcp_json)
@@ -59,6 +72,119 @@ impl McpHandler {
             }),
         )
     }
+
+    async fn handle_tools_call(&self, id: Value, params: Option<Value>) -> JsonRpcResponse {
+        let call_params = match parse_tools_call_params(params) {
+            Ok(call_params) => call_params,
+            Err(error) => {
+                return JsonRpcResponse::error(Some(id), -32602, error);
+            }
+        };
+
+        match self
+            .service
+            .execute_tool(&call_params.name, &call_params.arguments)
+            .await
+        {
+            Ok(result) => JsonRpcResponse::success(Some(id), execution_result_to_mcp_json(result)),
+            Err(error) => JsonRpcResponse::error(Some(id), -32603, error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolsCallParams {
+    name: String,
+    arguments: HashMap<String, String>,
+}
+
+fn parse_tools_call_params(params: Option<Value>) -> Result<ToolsCallParams, String> {
+    let params = match params {
+        Some(params) => params,
+        None => {
+            return Err("tools/call requires params".to_string());
+        }
+    };
+
+    let name = match params.get("name") {
+        Some(Value::String(name)) if !name.trim().is_empty() => name.clone(),
+        Some(_) => {
+            return Err("tools/call param 'name' must be a non-empty string".to_string());
+        }
+        None => {
+            return Err("tools/call missing required param 'name'".to_string());
+        }
+    };
+
+    let arguments = match params.get("arguments") {
+        Some(Value::Object(arguments_object)) => value_object_to_string_map(arguments_object)?,
+        Some(_) => {
+            return Err("tools/call param 'arguments' must be an object".to_string());
+        }
+        None => HashMap::new(),
+    };
+
+    Ok(ToolsCallParams { name, arguments })
+}
+
+fn value_object_to_string_map(
+    object: &serde_json::Map<String, Value>,
+) -> Result<HashMap<String, String>, String> {
+    let mut arguments = HashMap::new();
+
+    for (key, value) in object {
+        match value {
+            Value::String(string_value) => {
+                arguments.insert(key.clone(), string_value.clone());
+            }
+            Value::Number(number_value) => {
+                arguments.insert(key.clone(), number_value.to_string());
+            }
+            Value::Bool(bool_value) => {
+                arguments.insert(key.clone(), bool_value.to_string());
+            }
+            Value::Null => {
+                return Err(format!("Argument '{key}' cannot be null"));
+            }
+            Value::Array(_) | Value::Object(_) => {
+                return Err(format!(
+                    "Argument '{key}' must be a string, number, or boolean"
+                ));
+            }
+        }
+    }
+
+    Ok(arguments)
+}
+
+fn execution_result_to_mcp_json(result: ExecutionResult) -> Value {
+    let is_error = result.timed_out || result.exit_code != Some(0);
+
+    let mut text = String::new();
+
+    text.push_str(&format!("exit_code: {:?}\n", result.exit_code));
+    text.push_str(&format!("timed_out: {}\n", result.timed_out));
+    text.push_str(&format!("duration_ms: {}\n", result.duration_ms));
+
+    if !result.stdout.trim().is_empty() {
+        text.push_str("\nstdout:\n");
+        text.push_str(&result.stdout);
+    }
+
+    if !result.stderr.trim().is_empty() {
+        text.push_str("\nstderr:\n");
+        text.push_str(&result.stderr);
+    }
+
+    json!({
+        "content": [
+            {
+                "type": "text",
+                "text": text
+            }
+        ],
+        "isError": is_error
+    })
 }
 
 fn tool_to_mcp_json(tool: &crate::model::ToolDefinition) -> Value {
@@ -94,6 +220,8 @@ fn tool_to_mcp_json(tool: &crate::model::ToolDefinition) -> Value {
 mod tests {
     use super::*;
     use crate::model::{ToolDefinition, ToolParameter};
+    use crate::registry::ToolRegistry;
+    use crate::service::ToolExecutionService;
     use serde_json::json;
 
     fn echo_tool() -> ToolDefinition {
@@ -122,9 +250,26 @@ mod tests {
         }
     }
 
+    fn echo_like_required_parameter_tool() -> ToolDefinition {
+        ToolDefinition {
+            name: "echo-like".to_string(),
+            description: "Requires a message parameter".to_string(),
+            command: "rustc".to_string(),
+            arguments: vec!["--version".to_string()],
+            parameters: vec![ToolParameter {
+                name: "message".to_string(),
+                parameter_type: "string".to_string(),
+                required: true,
+            }],
+            timeout_ms: 5000,
+        }
+    }
+
     fn handler_with_tools(tools: Vec<ToolDefinition>) -> McpHandler {
         let registry = ToolRegistry::new(tools);
-        McpHandler::new(registry)
+        let service = ToolExecutionService::new(registry);
+
+        McpHandler::new(service)
     }
 
     fn initialize_request() -> JsonRpcRequest {
@@ -138,12 +283,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn handles_initialize_request() {
+    #[tokio::test]
+    async fn handles_initialize_request() {
         let handler = handler_with_tools(vec![]);
         let request = initialize_request();
 
-        match handler.handle_request(request) {
+        match handler.handle_request(request).await {
             Some(response) => {
                 assert_eq!(response.jsonrpc, "2.0");
                 assert_eq!(response.id, Some(json!(1)));
@@ -153,6 +298,7 @@ mod tests {
                     Some(result) => {
                         assert_eq!(result["protocolVersion"], "2025-06-18");
                         assert_eq!(result["serverInfo"]["name"], "mercurius-p");
+                        assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
                         assert!(result["capabilities"]["tools"].is_object());
                     }
                     None => {
@@ -166,8 +312,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn handles_tools_list_with_required_parameter() {
+    #[tokio::test]
+    async fn handles_tools_list_with_required_parameter() {
         let handler = handler_with_tools(vec![echo_tool()]);
 
         let request = JsonRpcRequest {
@@ -177,7 +323,7 @@ mod tests {
             params: None,
         };
 
-        match handler.handle_request(request) {
+        match handler.handle_request(request).await {
             Some(response) => {
                 assert_eq!(response.jsonrpc, "2.0");
                 assert_eq!(response.id, Some(json!(2)));
@@ -208,8 +354,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn handles_tools_list_with_no_parameter_tool() {
+    #[tokio::test]
+    async fn handles_tools_list_with_no_parameter_tool() {
         let handler = handler_with_tools(vec![no_parameter_tool()]);
 
         let request = JsonRpcRequest {
@@ -219,31 +365,217 @@ mod tests {
             params: None,
         };
 
-        match handler.handle_request(request) {
-            Some(response) => match response.result {
-                Some(result) => {
-                    assert_eq!(result["tools"][0]["name"], "rustc-version");
-                    assert!(result["tools"][0]["inputSchema"]["properties"].is_object());
-                    assert!(result["tools"][0]["inputSchema"]["required"].is_array());
-                    assert_eq!(
-                        result["tools"][0]["inputSchema"]["required"]
-                            .as_array()
-                            .map(|required| required.len()),
-                        Some(0)
-                    );
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert_eq!(response.jsonrpc, "2.0");
+                assert_eq!(response.id, Some(json!(3)));
+                assert!(response.error.is_none());
+
+                match response.result {
+                    Some(result) => {
+                        assert_eq!(result["tools"][0]["name"], "rustc-version");
+                        assert!(result["tools"][0]["inputSchema"]["properties"].is_object());
+                        assert!(result["tools"][0]["inputSchema"]["required"].is_array());
+
+                        match result["tools"][0]["inputSchema"]["required"].as_array() {
+                            Some(required) => {
+                                assert_eq!(required.len(), 0);
+                            }
+                            None => {
+                                panic!("Expected required field to be an array");
+                            }
+                        }
+                    }
+                    None => {
+                        panic!("Expected tools/list response to contain result");
+                    }
                 }
-                None => {
-                    panic!("Expected tools/list response to contain result");
-                }
-            },
+            }
             None => {
                 panic!("Expected tools/list request to produce a response");
             }
         }
     }
 
-    #[test]
-    fn returns_method_not_found_for_unknown_method() {
+    #[tokio::test]
+    async fn handles_tools_call_for_no_parameter_tool() {
+        let handler = handler_with_tools(vec![no_parameter_tool()]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(4)),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "rustc-version",
+                "arguments": {}
+            })),
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert_eq!(response.jsonrpc, "2.0");
+                assert_eq!(response.id, Some(json!(4)));
+                assert!(response.error.is_none());
+
+                match response.result {
+                    Some(result) => {
+                        assert_eq!(result["isError"], false);
+                        assert_eq!(result["content"][0]["type"], "text");
+
+                        match result["content"][0]["text"].as_str() {
+                            Some(text) => {
+                                assert!(text.contains("rustc"));
+                            }
+                            None => {
+                                panic!("Expected MCP content text to be a string");
+                            }
+                        }
+                    }
+                    None => {
+                        panic!("Expected tools/call response to contain result");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected tools/call request to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_call_returns_invalid_params_when_params_missing() {
+        let handler = handler_with_tools(vec![no_parameter_tool()]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(5)),
+            method: "tools/call".to_string(),
+            params: None,
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert!(response.result.is_none());
+
+                match response.error {
+                    Some(error) => {
+                        assert_eq!(error.code, -32602);
+                        assert!(error.message.contains("requires params"));
+                    }
+                    None => {
+                        panic!("Expected tools/call without params to return error");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected tools/call request to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_call_returns_invalid_params_when_name_missing() {
+        let handler = handler_with_tools(vec![no_parameter_tool()]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(6)),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "arguments": {}
+            })),
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert!(response.result.is_none());
+
+                match response.error {
+                    Some(error) => {
+                        assert_eq!(error.code, -32602);
+                        assert!(error.message.contains("name"));
+                    }
+                    None => {
+                        panic!("Expected tools/call without name to return error");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected tools/call request to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_call_returns_execution_error_for_unknown_tool() {
+        let handler = handler_with_tools(vec![no_parameter_tool()]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(7)),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "missing-tool",
+                "arguments": {}
+            })),
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert!(response.result.is_none());
+
+                match response.error {
+                    Some(error) => {
+                        assert_eq!(error.code, -32603);
+                        assert!(error.message.contains("missing-tool"));
+                    }
+                    None => {
+                        panic!("Expected unknown tool call to return error");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected tools/call request to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_call_returns_execution_error_for_missing_required_parameter() {
+        let handler = handler_with_tools(vec![echo_like_required_parameter_tool()]);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(8)),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "echo-like",
+                "arguments": {}
+            })),
+        };
+
+        match handler.handle_request(request).await {
+            Some(response) => {
+                assert!(response.result.is_none());
+
+                match response.error {
+                    Some(error) => {
+                        assert_eq!(error.code, -32603);
+                        assert!(error.message.contains("Missing required parameter"));
+                    }
+                    None => {
+                        panic!("Expected missing required parameter to return error");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected tools/call request to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_method_not_found_for_unknown_method() {
         let handler = handler_with_tools(vec![]);
 
         let request = JsonRpcRequest {
@@ -253,8 +585,9 @@ mod tests {
             params: None,
         };
 
-        match handler.handle_request(request) {
+        match handler.handle_request(request).await {
             Some(response) => {
+                assert_eq!(response.jsonrpc, "2.0");
                 assert_eq!(response.id, Some(json!(99)));
                 assert!(response.result.is_none());
 
@@ -274,8 +607,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ignores_notification_without_id() {
+    #[tokio::test]
+    async fn ignores_notification_without_id() {
         let handler = handler_with_tools(vec![]);
 
         let request = JsonRpcRequest {
@@ -285,7 +618,7 @@ mod tests {
             params: None,
         };
 
-        if let Some(response) = handler.handle_request(request) {
+        if let Some(response) = handler.handle_request(request).await {
             panic!("Expected notification to be ignored, but got response: {response:?}");
         }
     }
