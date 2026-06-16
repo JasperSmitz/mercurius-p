@@ -87,3 +87,140 @@ impl McpStdioServer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ToolDefinition;
+    use crate::registry::ToolRegistry;
+    use crate::service::ToolExecutionService;
+    use serde_json::Value;
+
+    fn no_parameter_tool() -> ToolDefinition {
+        ToolDefinition {
+            name: "rustc-version".to_string(),
+            description: "Print rustc version".to_string(),
+            command: "rustc".to_string(),
+            arguments: vec!["--version".to_string()],
+            parameters: vec![],
+            timeout_ms: 5000,
+        }
+    }
+
+    fn test_server() -> McpStdioServer {
+        let registry = ToolRegistry::new(vec![no_parameter_tool()]);
+        let service = ToolExecutionService::new(registry);
+        let handler = McpHandler::new(service);
+
+        McpStdioServer::new(handler)
+    }
+
+    #[tokio::test]
+    async fn handles_initialize_line() {
+        let server = test_server();
+
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+
+        match server.handle_line(line).await {
+            Some(response_line) => {
+                let parsed_result: Result<Value, serde_json::Error> =
+                    serde_json::from_str(&response_line);
+
+                match parsed_result {
+                    Ok(value) => {
+                        assert_eq!(value["jsonrpc"], "2.0");
+                        assert_eq!(value["id"], 1);
+                        assert_eq!(value["result"]["serverInfo"]["name"], "mercurius-p");
+                    }
+                    Err(error) => {
+                        panic!("Expected response line to be valid JSON, but got: {error}");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected initialize line to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn handles_tools_list_line() {
+        let server = test_server();
+
+        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+
+        match server.handle_line(line).await {
+            Some(response_line) => {
+                let parsed_result: Result<Value, serde_json::Error> =
+                    serde_json::from_str(&response_line);
+
+                match parsed_result {
+                    Ok(value) => {
+                        assert_eq!(value["jsonrpc"], "2.0");
+                        assert_eq!(value["id"], 2);
+                        assert_eq!(value["result"]["tools"][0]["name"], "rustc-version");
+                    }
+                    Err(error) => {
+                        panic!("Expected response line to be valid JSON, but got: {error}");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected tools/list line to produce a response");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ignores_notification_line() {
+        let server = test_server();
+
+        let line = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+
+        if let Some(response_line) = server.handle_line(line).await {
+            panic!("Expected notification to be ignored, but got: {response_line}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ignores_blank_line() {
+        let server = test_server();
+
+        if let Some(response_line) = server.handle_line("   ").await {
+            panic!("Expected blank line to be ignored, but got: {response_line}");
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_parse_error_for_invalid_json() {
+        let server = test_server();
+
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize""#;
+
+        match server.handle_line(line).await {
+            Some(response_line) => {
+                let parsed_result: Result<Value, serde_json::Error> =
+                    serde_json::from_str(&response_line);
+
+                match parsed_result {
+                    Ok(value) => {
+                        assert_eq!(value["jsonrpc"], "2.0");
+                        assert_eq!(value["error"]["code"], -32700);
+                        assert!(
+                            value["error"]["message"]
+                                .as_str()
+                                .map(|message| message.contains("Parse error"))
+                                .unwrap_or(false)
+                        );
+                    }
+                    Err(error) => {
+                        panic!("Expected parse error response to be valid JSON, but got: {error}");
+                    }
+                }
+            }
+            None => {
+                panic!("Expected invalid JSON to produce a parse error response");
+            }
+        }
+    }
+}
