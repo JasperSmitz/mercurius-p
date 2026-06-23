@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolDefinition {
@@ -86,7 +87,7 @@ pub enum ToolValidationError {
 pub fn validate_tool_call(
     tool: &ToolDefinition,
     input: &serde_json::Value,
-    _policy: &SecurityPolicy,
+    policy: &SecurityPolicy,
 ) -> Result<ResolvedToolCall, ToolValidationError> {
     let input = input
         .as_object()
@@ -95,6 +96,7 @@ pub fn validate_tool_call(
     validate_known_parameters(tool, input)?;
 
     let resolved_parameters = resolve_parameters(tool, input)?;
+    validate_resolved_path_parameters(tool, &resolved_parameters, policy)?;
     let resolved_arguments = tool
         .arguments
         .iter()
@@ -105,13 +107,16 @@ pub fn validate_tool_call(
         .working_directory
         .as_ref()
         .map(|working_directory| resolve_placeholders(working_directory, &resolved_parameters))
-        .transpose()?
-        .map(PathBuf::from);
+        .transpose()?;
+
+    if let Some(working_directory) = resolved_working_directory.as_ref() {
+        validate_path_allowed(working_directory, policy)?;
+    }
 
     Ok(ResolvedToolCall {
         command: tool.command.clone(),
         arguments: resolved_arguments,
-        working_directory: resolved_working_directory,
+        working_directory: resolved_working_directory.map(PathBuf::from),
         timeout_ms: tool.timeout_ms.unwrap_or(5000),
     })
 }
@@ -206,6 +211,84 @@ fn validate_parameter_value(
     }
 }
 
+fn validate_resolved_path_parameters(
+    tool: &ToolDefinition,
+    resolved_parameters: &HashMap<String, String>,
+    policy: &SecurityPolicy,
+) -> Result<(), ToolValidationError> {
+    for parameter in &tool.parameters {
+        if parameter.parameter_type == ParameterType::Path
+            && let Some(path) = resolved_parameters.get(&parameter.name)
+        {
+            validate_path_allowed(path, policy)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_path_allowed(path: &str, policy: &SecurityPolicy) -> Result<(), ToolValidationError> {
+    if path.is_empty() || path.contains('\0') {
+        return Err(ToolValidationError::PathNotAllowed(path.to_string()));
+    }
+
+    let requested_path = PathBuf::from(path);
+    if !requested_path.is_absolute() {
+        return Err(ToolValidationError::PathNotAllowed(path.to_string()));
+    }
+
+    let Some(canonical_path) = canonicalize_path_or_existing_parent(&requested_path) else {
+        return Err(ToolValidationError::PathNotAllowed(path.to_string()));
+    };
+
+    let blocked_roots = canonicalize_existing_roots(&policy.blocked_paths);
+    if blocked_roots
+        .iter()
+        .any(|blocked_root| canonical_path.starts_with(blocked_root))
+    {
+        return Err(ToolValidationError::PathNotAllowed(path.to_string()));
+    }
+
+    if policy.allowed_paths.is_empty() {
+        return Ok(());
+    }
+
+    let allowed_roots = canonicalize_existing_roots(&policy.allowed_paths);
+    if allowed_roots
+        .iter()
+        .any(|allowed_root| canonical_path.starts_with(allowed_root))
+    {
+        Ok(())
+    } else {
+        Err(ToolValidationError::PathNotAllowed(path.to_string()))
+    }
+}
+
+fn canonicalize_existing_roots(paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter_map(|path| fs::canonicalize(path).ok())
+        .collect()
+}
+
+fn canonicalize_path_or_existing_parent(requested_path: &Path) -> Option<PathBuf> {
+    let mut candidate = Some(requested_path);
+
+    while let Some(path) = candidate {
+        if let Ok(canonical_path) = fs::canonicalize(path) {
+            if path != requested_path && path.parent().is_none() {
+                return None;
+            }
+
+            return Some(canonical_path);
+        }
+
+        candidate = path.parent();
+    }
+
+    None
+}
+
 fn invalid_parameter_type(parameter: &ToolParameter) -> ToolValidationError {
     ToolValidationError::InvalidParameterType {
         parameter: parameter.name.clone(),
@@ -246,6 +329,7 @@ fn resolve_placeholders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn parameter(name: &str, parameter_type: ParameterType) -> ToolParameter {
         ToolParameter {
@@ -286,6 +370,38 @@ mod tests {
             allowed_paths: vec![],
             blocked_paths: vec![],
         }
+    }
+
+    fn policy(allowed_paths: Vec<PathBuf>, blocked_paths: Vec<PathBuf>) -> SecurityPolicy {
+        SecurityPolicy {
+            allowed_paths,
+            blocked_paths,
+        }
+    }
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!(
+            "mercurius-p-tool-model-{}-{nanos}-{name}",
+            std::process::id()
+        ))
+    }
+
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let path = unique_temp_path(name);
+        std::fs::create_dir_all(&path).expect("temporary test directory should be created");
+        path
+    }
+
+    fn path_tool(arguments: Vec<&str>) -> ToolDefinition {
+        tool_with_parameters(
+            vec![required_parameter("path", ParameterType::Path)],
+            arguments,
+        )
     }
 
     #[test]
@@ -724,5 +840,268 @@ mod tests {
             resolved.working_directory,
             Some(PathBuf::from("/tmp/project"))
         );
+    }
+
+    #[test]
+    fn path_under_allowed_root_is_accepted() {
+        let allowed_root = create_temp_dir("allowed-root");
+        let child = allowed_root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": child});
+
+        let resolved =
+            validate_tool_call(&tool, &input, &policy(vec![allowed_root.clone()], vec![])).unwrap();
+
+        assert_eq!(
+            resolved.arguments,
+            vec![child.to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn path_outside_allowed_root_is_rejected() {
+        let allowed_root = create_temp_dir("allowed-root");
+        let outside_root = create_temp_dir("outside-root");
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": outside_root});
+
+        let error =
+            validate_tool_call(&tool, &input, &policy(vec![allowed_root], vec![])).unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed(outside_root.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn empty_allowed_paths_allows_normal_paths_unless_blocked() {
+        let allowed_by_default = create_temp_dir("allowed-by-default");
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": allowed_by_default});
+
+        let resolved = validate_tool_call(&tool, &input, &empty_policy()).unwrap();
+
+        assert_eq!(
+            resolved.arguments,
+            vec![allowed_by_default.to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn blocked_path_is_rejected() {
+        let blocked_root = create_temp_dir("blocked-root");
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": blocked_root});
+
+        let error = validate_tool_call(&tool, &input, &policy(vec![], vec![blocked_root.clone()]))
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed(blocked_root.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn blocked_path_takes_precedence_over_allowed_path() {
+        let allowed_root = create_temp_dir("allowed-root");
+        let blocked_root = allowed_root.join("blocked");
+        std::fs::create_dir_all(&blocked_root).unwrap();
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": blocked_root});
+
+        let error = validate_tool_call(
+            &tool,
+            &input,
+            &policy(vec![allowed_root], vec![blocked_root.clone()]),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed(blocked_root.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn path_with_dot_dot_escaping_allowed_root_is_rejected() {
+        let base = create_temp_dir("traversal-base");
+        let allowed_root = base.join("allowed");
+        let outside_root = base.join("outside");
+        std::fs::create_dir_all(&allowed_root).unwrap();
+        std::fs::create_dir_all(&outside_root).unwrap();
+        let escaping_path = allowed_root.join("..").join("outside");
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": escaping_path});
+
+        let error =
+            validate_tool_call(&tool, &input, &policy(vec![allowed_root], vec![])).unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed(escaping_path.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn path_with_dot_dot_staying_inside_allowed_root_is_accepted() {
+        let allowed_root = create_temp_dir("traversal-allowed-root");
+        let child = allowed_root.join("child");
+        let sibling = allowed_root.join("sibling");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        let staying_inside_path = child.join("..").join("sibling");
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": staying_inside_path});
+
+        let resolved =
+            validate_tool_call(&tool, &input, &policy(vec![allowed_root], vec![])).unwrap();
+
+        assert_eq!(
+            resolved.arguments,
+            vec![staying_inside_path.to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn nonexistent_file_under_existing_allowed_parent_is_accepted() {
+        let allowed_root = create_temp_dir("allowed-root");
+        let missing_file = allowed_root.join("new-file.txt");
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": missing_file});
+
+        let resolved =
+            validate_tool_call(&tool, &input, &policy(vec![allowed_root], vec![])).unwrap();
+
+        assert_eq!(
+            resolved.arguments,
+            vec![missing_file.to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn nonexistent_path_with_no_existing_parent_is_rejected() {
+        let missing_path = PathBuf::from(format!(
+            "/mercurius-p-missing-root-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after Unix epoch")
+                .as_nanos()
+        ))
+        .join("file.txt");
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": missing_path});
+
+        let error = validate_tool_call(&tool, &input, &empty_policy()).unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed(missing_path.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn relative_path_is_rejected() {
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": "relative/path"});
+
+        let error = validate_tool_call(&tool, &input, &empty_policy()).unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed("relative/path".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_path_is_rejected() {
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": ""});
+
+        let error = validate_tool_call(&tool, &input, &empty_policy()).unwrap_err();
+
+        assert_eq!(error, ToolValidationError::PathNotAllowed(String::new()));
+    }
+
+    #[test]
+    fn path_containing_null_byte_is_rejected() {
+        let tool = path_tool(vec!["{path}"]);
+        let input = serde_json::json!({"path": "/tmp/path\u{0}suffix"});
+
+        let error = validate_tool_call(&tool, &input, &empty_policy()).unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed("/tmp/path\u{0}suffix".to_string())
+        );
+    }
+
+    #[test]
+    fn literal_working_directory_under_allowed_root_is_accepted() {
+        let allowed_root = create_temp_dir("workdir-allowed-root");
+        let workdir = allowed_root.join("workdir");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let mut tool = tool_with_parameters(vec![], vec!["status"]);
+        tool.working_directory = Some(workdir.to_string_lossy().to_string());
+
+        let resolved = validate_tool_call(
+            &tool,
+            &serde_json::json!({}),
+            &policy(vec![allowed_root], vec![]),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.working_directory, Some(workdir));
+    }
+
+    #[test]
+    fn literal_working_directory_outside_allowed_root_is_rejected() {
+        let allowed_root = create_temp_dir("workdir-allowed-root");
+        let outside_root = create_temp_dir("workdir-outside-root");
+        let mut tool = tool_with_parameters(vec![], vec!["status"]);
+        tool.working_directory = Some(outside_root.to_string_lossy().to_string());
+
+        let error = validate_tool_call(
+            &tool,
+            &serde_json::json!({}),
+            &policy(vec![allowed_root], vec![]),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ToolValidationError::PathNotAllowed(outside_root.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn resolved_working_directory_from_path_placeholder_is_validated() {
+        let allowed_root = create_temp_dir("workdir-placeholder-allowed-root");
+        let workdir = allowed_root.join("workdir");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let mut tool = path_tool(vec!["status"]);
+        tool.working_directory = Some("{path}".to_string());
+        let input = serde_json::json!({"path": workdir});
+
+        let resolved =
+            validate_tool_call(&tool, &input, &policy(vec![allowed_root], vec![])).unwrap();
+
+        assert_eq!(resolved.working_directory, Some(workdir));
+    }
+
+    #[test]
+    fn non_path_parameters_still_work() {
+        let tool = tool_with_parameters(
+            vec![required_parameter("message", ParameterType::String)],
+            vec!["{message}"],
+        );
+        let input = serde_json::json!({"message": "hello"});
+
+        let resolved = validate_tool_call(&tool, &input, &empty_policy()).unwrap();
+
+        assert_eq!(resolved.arguments, vec!["hello"]);
     }
 }
