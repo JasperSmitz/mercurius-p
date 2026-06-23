@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,6 +83,50 @@ pub enum ToolValidationError {
     InvalidEnumConfiguration(String),
     PathNotAllowed(String),
     UnknownPlaceholder(String),
+}
+
+impl fmt::Display for ToolValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidInput(message) => write!(formatter, "Invalid input: {message}"),
+            Self::MissingParameter(parameter) => {
+                write!(formatter, "Missing required parameter: {parameter}")
+            }
+            Self::UnknownParameter(parameter) => {
+                write!(formatter, "Unknown parameter: {parameter}")
+            }
+            Self::InvalidParameterType {
+                parameter,
+                expected,
+            } => {
+                write!(
+                    formatter,
+                    "Invalid parameter type for '{parameter}', expected {expected:?}"
+                )
+            }
+            Self::InvalidEnumValue {
+                parameter,
+                value,
+                allowed_values,
+            } => {
+                write!(
+                    formatter,
+                    "Invalid enum value '{value}' for parameter '{parameter}', allowed values: {}",
+                    allowed_values.join(", ")
+                )
+            }
+            Self::InvalidEnumConfiguration(parameter) => {
+                write!(
+                    formatter,
+                    "Invalid enum configuration for parameter: {parameter}"
+                )
+            }
+            Self::PathNotAllowed(path) => write!(formatter, "Path not allowed: {path}"),
+            Self::UnknownPlaceholder(parameter) => {
+                write!(formatter, "Unknown placeholder: {parameter}")
+            }
+        }
+    }
 }
 
 pub fn validate_tool_call(

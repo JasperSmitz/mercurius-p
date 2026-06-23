@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -159,7 +158,7 @@ impl McpHandler {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolsCallParams {
     name: String,
-    arguments: HashMap<String, String>,
+    arguments: Value,
 }
 
 fn parse_resource_uri(params: Option<Value>) -> Result<String, String> {
@@ -196,44 +195,14 @@ fn parse_tools_call_params(params: Option<Value>) -> Result<ToolsCallParams, Str
     };
 
     let arguments = match params.get("arguments") {
-        Some(Value::Object(arguments_object)) => value_object_to_string_map(arguments_object)?,
+        Some(Value::Object(_)) => params["arguments"].clone(),
         Some(_) => {
             return Err("tools/call param 'arguments' must be an object".to_string());
         }
-        None => HashMap::new(),
+        None => json!({}),
     };
 
     Ok(ToolsCallParams { name, arguments })
-}
-
-fn value_object_to_string_map(
-    object: &serde_json::Map<String, Value>,
-) -> Result<HashMap<String, String>, String> {
-    let mut arguments = HashMap::new();
-
-    for (key, value) in object {
-        match value {
-            Value::String(string_value) => {
-                arguments.insert(key.clone(), string_value.clone());
-            }
-            Value::Number(number_value) => {
-                arguments.insert(key.clone(), number_value.to_string());
-            }
-            Value::Bool(bool_value) => {
-                arguments.insert(key.clone(), bool_value.to_string());
-            }
-            Value::Null => {
-                return Err(format!("Argument '{key}' cannot be null"));
-            }
-            Value::Array(_) | Value::Object(_) => {
-                return Err(format!(
-                    "Argument '{key}' must be a string, number, or boolean"
-                ));
-            }
-        }
-    }
-
-    Ok(arguments)
 }
 
 fn execution_result_to_mcp_json(result: ExecutionResult) -> Value {

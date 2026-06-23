@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Stdio;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -13,16 +14,22 @@ impl ProcessExecutor {
     pub async fn execute(
         command: &str,
         arguments: &[String],
+        working_directory: Option<&Path>,
         timeout_ms: u64,
     ) -> Result<ExecutionResult, String> {
         let start = Instant::now();
 
-        let mut child = match Command::new(command)
+        let mut process = Command::new(command);
+        process
             .args(arguments)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+            .stderr(Stdio::piped());
+
+        if let Some(working_directory) = working_directory {
+            process.current_dir(working_directory);
+        }
+
+        let mut child = match process.spawn() {
             Ok(child) => child,
             Err(error) => {
                 return Err(format!("Failed to start process '{command}': {error}"));
@@ -129,7 +136,7 @@ mod tests {
     async fn executes_command_successfully() {
         let arguments = vec!["--version".to_string()];
 
-        match ProcessExecutor::execute("rustc", &arguments, 5000).await {
+        match ProcessExecutor::execute("rustc", &arguments, None, 5000).await {
             Ok(result) => {
                 assert!(!result.timed_out);
                 assert_eq!(result.exit_code, Some(0));
@@ -145,7 +152,7 @@ mod tests {
     async fn captures_stderr_for_failed_command() {
         let arguments = vec!["--definitely-not-a-real-rustc-flag".to_string()];
 
-        match ProcessExecutor::execute("rustc", &arguments, 5000).await {
+        match ProcessExecutor::execute("rustc", &arguments, None, 5000).await {
             Ok(result) => {
                 assert!(!result.timed_out);
                 assert_ne!(result.exit_code, Some(0));
@@ -161,7 +168,9 @@ mod tests {
     async fn returns_error_for_missing_command() {
         let arguments = Vec::new();
 
-        match ProcessExecutor::execute("definitely-not-a-real-command", &arguments, 5000).await {
+        match ProcessExecutor::execute("definitely-not-a-real-command", &arguments, None, 5000)
+            .await
+        {
             Ok(result) => {
                 panic!("Expected missing command to fail, but got: {result:?}");
             }
@@ -175,7 +184,7 @@ mod tests {
     async fn times_out_long_running_process() {
         let (command, arguments) = long_running_command();
 
-        match ProcessExecutor::execute(command, &arguments, 100).await {
+        match ProcessExecutor::execute(command, &arguments, None, 100).await {
             Ok(result) => {
                 assert!(result.timed_out);
                 assert_eq!(result.exit_code, None);
@@ -197,5 +206,24 @@ mod tests {
             "cmd",
             vec!["/C".to_string(), "ping 127.0.0.1 -n 6 > nul".to_string()],
         )
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn executes_command_in_working_directory() {
+        let working_directory =
+            std::env::temp_dir().join(format!("mercurius-p-executor-pwd-{}", std::process::id()));
+        std::fs::create_dir_all(&working_directory).unwrap();
+
+        match ProcessExecutor::execute("pwd", &[], Some(&working_directory), 5000).await {
+            Ok(result) => {
+                assert!(!result.timed_out);
+                assert_eq!(result.exit_code, Some(0));
+                assert_eq!(result.stdout.trim(), working_directory.to_string_lossy());
+            }
+            Err(error) => {
+                panic!("Expected pwd to execute successfully, but got: {error}");
+            }
+        }
     }
 }
