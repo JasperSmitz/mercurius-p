@@ -195,9 +195,38 @@ mod tests {
             name: "system-load".to_string(),
             description: "Show system load".to_string(),
             command: "uptime".to_string(),
-            arguments: vec![],
+            arguments: vec!["--pretty".to_string()],
             parameters: vec![],
             timeout_ms: Some(3000),
+            read_only: true,
+            category: Some("system".to_string()),
+            working_directory: Some("/tmp".to_string()),
+        };
+
+        let policy = SecurityPolicy {
+            allowed_paths: vec![],
+            blocked_paths: vec![],
+        };
+
+        let input = serde_json::json!({});
+
+        let resolved = validate_tool_call(&tool, &input, &policy).unwrap();
+
+        assert_eq!(resolved.command, "uptime");
+        assert_eq!(resolved.arguments, vec!["--pretty"]);
+        assert_eq!(resolved.timeout_ms, 3000);
+        assert_eq!(resolved.working_directory, Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn validate_tool_call_uses_default_timeout_when_missing() {
+        let tool = ToolDefinition {
+            name: "system-load".to_string(),
+            description: "Show system load".to_string(),
+            command: "uptime".to_string(),
+            arguments: vec![],
+            parameters: vec![],
+            timeout_ms: None,
             read_only: true,
             category: Some("system".to_string()),
             working_directory: None,
@@ -212,9 +241,6 @@ mod tests {
 
         let resolved = validate_tool_call(&tool, &input, &policy).unwrap();
 
-        assert_eq!(resolved.command, "uptime");
-        assert_eq!(resolved.arguments, Vec::<String>::new());
-        assert_eq!(resolved.timeout_ms, 3000);
-        assert_eq!(resolved.working_directory, None);
+        assert_eq!(resolved.timeout_ms, 5000);
     }
 }

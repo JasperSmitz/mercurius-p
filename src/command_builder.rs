@@ -67,7 +67,7 @@ fn replace_placeholders(argument: &str, parameters: &HashMap<String, String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ToolDefinition, ToolParameter};
+    use crate::model::{ParameterType, ToolDefinition, ToolParameter};
 
     fn valid_tool() -> ToolDefinition {
         ToolDefinition {
@@ -77,10 +77,15 @@ mod tests {
             arguments: vec!["{message}".to_string()],
             parameters: vec![ToolParameter {
                 name: "message".to_string(),
-                parameter_type: "string".to_string(),
+                parameter_type: ParameterType::String,
                 required: true,
+                default: None,
+                allowed_values: None,
             }],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 
@@ -127,13 +132,17 @@ mod tests {
         tool.parameters = vec![
             ToolParameter {
                 name: "name".to_string(),
-                parameter_type: "string".to_string(),
+                parameter_type: ParameterType::String,
                 required: true,
+                default: None,
+                allowed_values: None,
             },
             ToolParameter {
                 name: "message".to_string(),
-                parameter_type: "string".to_string(),
+                parameter_type: ParameterType::String,
                 required: true,
+                default: None,
+                allowed_values: None,
             },
         ];
 
@@ -190,8 +199,10 @@ mod tests {
         tool.arguments = vec!["hello".to_string()];
         tool.parameters = vec![ToolParameter {
             name: "message".to_string(),
-            parameter_type: "string".to_string(),
+            parameter_type: ParameterType::String,
             required: false,
+            default: None,
+            allowed_values: None,
         }];
 
         let parameters = HashMap::new();

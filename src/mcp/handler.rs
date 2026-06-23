@@ -298,7 +298,7 @@ fn tool_to_mcp_json(tool: &crate::model::ToolDefinition) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ToolDefinition, ToolParameter};
+    use crate::model::{ParameterType, ToolDefinition, ToolParameter};
     use crate::registry::ToolRegistry;
     use crate::service::ToolExecutionService;
     use serde_json::json;
@@ -311,10 +311,15 @@ mod tests {
             arguments: vec!["{message}".to_string()],
             parameters: vec![ToolParameter {
                 name: "message".to_string(),
-                parameter_type: "string".to_string(),
+                parameter_type: ParameterType::String,
                 required: true,
+                default: None,
+                allowed_values: None,
             }],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 
@@ -325,7 +330,10 @@ mod tests {
             command: "rustc".to_string(),
             arguments: vec!["--version".to_string()],
             parameters: vec![],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 
@@ -337,10 +345,15 @@ mod tests {
             arguments: vec!["--version".to_string()],
             parameters: vec![ToolParameter {
                 name: "message".to_string(),
-                parameter_type: "string".to_string(),
+                parameter_type: ParameterType::String,
                 required: true,
+                default: None,
+                allowed_values: None,
             }],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 
@@ -758,7 +771,7 @@ mod tests {
 
                         match result["contents"][0]["text"].as_str() {
                             Some(text) => {
-                                assert!(text.contains("echo"));
+                                assert!(text.contains("top-cpu-processes"));
                             }
                             None => {
                                 panic!("Expected resource text to be a string");

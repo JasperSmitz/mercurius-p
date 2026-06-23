@@ -97,7 +97,10 @@ mod tests {
             command: "rustc".to_string(),
             arguments: vec!["--version".to_string()],
             parameters: vec![],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 

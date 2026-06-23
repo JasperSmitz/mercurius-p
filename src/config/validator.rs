@@ -31,7 +31,7 @@ fn validate_tool(tool: &ToolDefinition) -> Result<(), String> {
         return Err(format!("Tool '{}' must have a command", tool.name));
     }
 
-    if tool.timeout_ms == 0 {
+    if tool.timeout_ms == Some(0) {
         return Err(format!(
             "Tool '{}' must have a timeout greater than 0",
             tool.name
@@ -54,13 +54,6 @@ fn validate_parameters(tool: &ToolDefinition) -> Result<(), String> {
             ));
         }
 
-        if parameter.parameter_type.trim().is_empty() {
-            return Err(format!(
-                "Tool '{}' has parameter '{}' with an empty type",
-                tool.name, parameter.name
-            ));
-        }
-
         let normalized_name = parameter.name.to_lowercase();
 
         if !parameter_names.insert(normalized_name) {
@@ -77,7 +70,7 @@ fn validate_parameters(tool: &ToolDefinition) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ToolDefinition, ToolParameter};
+    use crate::model::{ParameterType, ToolDefinition, ToolParameter};
 
     fn valid_tool(name: &str) -> ToolDefinition {
         ToolDefinition {
@@ -87,10 +80,15 @@ mod tests {
             arguments: vec!["{message}".to_string()],
             parameters: vec![ToolParameter {
                 name: "message".to_string(),
-                parameter_type: "string".to_string(),
+                parameter_type: ParameterType::String,
                 required: true,
+                default: None,
+                allowed_values: None,
             }],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 
@@ -149,7 +147,7 @@ mod tests {
     #[test]
     fn rejects_zero_timeout() {
         let mut tool = valid_tool("echo");
-        tool.timeout_ms = 0;
+        tool.timeout_ms = Some(0);
 
         match validate_tools(&[tool]) {
             Ok(()) => panic!("Expected zero timeout to fail validation"),
@@ -191,23 +189,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_parameter_type() {
-        let mut tool = valid_tool("echo");
-        tool.parameters[0].parameter_type = " ".to_string();
-
-        match validate_tools(&[tool]) {
-            Ok(()) => panic!("Expected empty parameter type to fail validation"),
-            Err(error) => assert!(error.contains("type")),
-        }
-    }
-
-    #[test]
     fn rejects_duplicate_parameter_names() {
         let mut tool = valid_tool("echo");
         tool.parameters.push(ToolParameter {
             name: "MESSAGE".to_string(),
-            parameter_type: "string".to_string(),
+            parameter_type: ParameterType::String,
             required: false,
+            default: None,
+            allowed_values: None,
         });
 
         match validate_tools(&[tool]) {

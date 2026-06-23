@@ -1,26 +1,47 @@
-[
-  {
-    "name": "echo",
-    "description": "Echo a message",
-    "command": "echo",
-    "arguments": [
-      "{message}"
-    ],
-    "parameters": [
-      {
-        "name": "message",
-        "type": "string",
-        "required": true
-      }
-    ],
-    "timeout_ms": 5000
-  },
-  {
-    "name": "rustc-version",
-    "description": "Print the installed Rust compiler version",
-    "command": "rustc",
-    "arguments": ["--version"],
-    "parameters": [],
-    "timeout_ms": 5000
-  }
-]
+{
+  "tools": [
+    {
+      "name": "top-cpu-processes",
+      "description": "Show the processes currently using the most CPU",
+      "command": "sh",
+      "arguments": [
+        "-c",
+        "ps -eo pid,ppid,comm,%cpu,%mem --sort=-%cpu | head -n 20"
+      ],
+      "parameters": [],
+      "timeout_ms": 3000,
+      "read_only": true,
+      "category": "system"
+    },
+    {
+      "name": "large-files",
+      "description": "Find large files under an allowed directory",
+      "command": "find",
+      "arguments": [
+        "{path}",
+        "-type",
+        "f",
+        "-size",
+        "+{min_size_mb}M",
+        "-printf",
+        "%s %p\\n"
+      ],
+      "parameters": [
+        {
+          "name": "path",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "min_size_mb",
+          "type": "integer",
+          "required": false,
+          "default": 500
+        }
+      ],
+      "timeout_ms": 10000,
+      "read_only": true,
+      "category": "storage"
+    }
+  ]
+}

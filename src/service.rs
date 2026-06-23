@@ -26,7 +26,7 @@ impl ToolExecutionService {
         ProcessExecutor::execute(
             &built_command.command,
             &built_command.arguments,
-            tool.timeout_ms,
+            tool.timeout_ms.unwrap_or(5000),
         )
         .await
     }
@@ -39,7 +39,7 @@ impl ToolExecutionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ToolDefinition, ToolParameter};
+    use crate::model::{ParameterType, ToolDefinition, ToolParameter};
 
     fn tool_with_required_parameter() -> ToolDefinition {
         ToolDefinition {
@@ -49,10 +49,15 @@ mod tests {
             arguments: vec!["--version".to_string()],
             parameters: vec![ToolParameter {
                 name: "message".to_string(),
-                parameter_type: "string".to_string(),
+                parameter_type: ParameterType::String,
                 required: true,
+                default: None,
+                allowed_values: None,
             }],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 
@@ -63,7 +68,10 @@ mod tests {
             command: "rustc".to_string(),
             arguments: vec!["--version".to_string()],
             parameters: vec![],
-            timeout_ms: 5000,
+            timeout_ms: Some(5000),
+            read_only: false,
+            category: None,
+            working_directory: None,
         }
     }
 
