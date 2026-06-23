@@ -1,9 +1,4 @@
-                                        _
-   ____ ___  ___  ____________  _______(_)_  _______      ____
-  / __ `__ \/ _ \/ ___/ ___/ / / / ___/ / / / / ___/_____/ __ \
- / / / / / /  __/ /  / /__/ /_/ / /  / / /_/ (__  )_____/ /_/ /
-/_/ /_/ /_/\___/_/   \___/\__,_/_/  /_/\__,_/____/     / .___/
-                                                      /_/
+# mercurius-p
 
 `mercurius-p` is a configurable [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) stdio server for exposing local commands and scripts as tools. Define tools in JSON, point an MCP client at the binary, and give agents a controlled way to run the commands you choose.
 
