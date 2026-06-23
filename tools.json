@@ -1,47 +1,415 @@
-{
-  "tools": [
-    {
-      "name": "top-cpu-processes",
-      "description": "Show the processes currently using the most CPU",
-      "command": "sh",
-      "arguments": [
-        "-c",
-        "ps -eo pid,ppid,comm,%cpu,%mem --sort=-%cpu | head -n 20"
-      ],
-      "parameters": [],
-      "timeout_ms": 3000,
-      "read_only": true,
-      "category": "system"
-    },
-    {
-      "name": "large-files",
-      "description": "Find large files under an allowed directory",
-      "command": "find",
-      "arguments": [
-        "{path}",
-        "-type",
-        "f",
-        "-size",
-        "+{min_size_mb}M",
-        "-printf",
-        "%s %p\\n"
-      ],
-      "parameters": [
-        {
-          "name": "path",
-          "type": "path",
-          "required": true
-        },
-        {
-          "name": "min_size_mb",
-          "type": "integer",
-          "required": false,
-          "default": 500
-        }
-      ],
-      "timeout_ms": 10000,
-      "read_only": true,
-      "category": "storage"
-    }
-  ]
-}
+[
+  {
+    "name": "system-load",
+    "description": "Show system uptime and load averages",
+    "command": "uptime",
+    "arguments": [],
+    "parameters": [],
+    "timeout_ms": 3000,
+    "read_only": true,
+    "category": "system"
+  },
+  {
+    "name": "memory-status",
+    "description": "Show current memory usage",
+    "command": "free",
+    "arguments": ["-h"],
+    "parameters": [],
+    "timeout_ms": 3000,
+    "read_only": true,
+    "category": "system"
+  },
+  {
+    "name": "top-cpu-processes",
+    "description": "Show the processes currently using the most CPU",
+    "command": "sh",
+    "arguments": [
+      "-c",
+      "ps -eo pid,ppid,comm,%cpu,%mem --sort=-%cpu | head -n 20"
+    ],
+    "parameters": [],
+    "timeout_ms": 3000,
+    "read_only": true,
+    "category": "system"
+  },
+  {
+    "name": "top-memory-processes",
+    "description": "Show the processes currently using the most memory",
+    "command": "sh",
+    "arguments": [
+      "-c",
+      "ps -eo pid,comm,rss,%mem --sort=-rss | head -n 25"
+    ],
+    "parameters": [],
+    "timeout_ms": 3000,
+    "read_only": true,
+    "category": "system"
+  },
+  {
+    "name": "process-search",
+    "description": "Search for running processes by name or command text",
+    "command": "pgrep",
+    "arguments": ["-af", "{query}"],
+    "parameters": [
+      {
+        "name": "query",
+        "type": "string",
+        "required": true
+      }
+    ],
+    "timeout_ms": 3000,
+    "read_only": true,
+    "category": "system"
+  },
+  {
+    "name": "disk-overview",
+    "description": "Show disk usage for mounted filesystems",
+    "command": "df",
+    "arguments": ["-h"],
+    "parameters": [],
+    "timeout_ms": 3000,
+    "read_only": true,
+    "category": "storage"
+  },
+  {
+    "name": "home-folder-sizes",
+    "description": "Show the largest folders in the user's home directory",
+    "command": "sh",
+    "arguments": [
+      "-c",
+      "du -h --max-depth=1 \"$HOME\" | sort -hr | head -n 30"
+    ],
+    "parameters": [],
+    "timeout_ms": 15000,
+    "read_only": true,
+    "category": "storage"
+  },
+  {
+    "name": "large-files",
+    "description": "Find large files under an allowed absolute directory",
+    "command": "find",
+    "arguments": [
+      "{path}",
+      "-type",
+      "f",
+      "-size",
+      "+{min_size_mb}M",
+      "-printf",
+      "%s %p\\n"
+    ],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      },
+      {
+        "name": "min_size_mb",
+        "type": "integer",
+        "required": false,
+        "default": 500
+      }
+    ],
+    "timeout_ms": 15000,
+    "read_only": true,
+    "category": "storage"
+  },
+  {
+    "name": "directory-size",
+    "description": "Show the total size of an absolute directory",
+    "command": "du",
+    "arguments": ["-sh", "{path}"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "timeout_ms": 15000,
+    "read_only": true,
+    "category": "storage"
+  },
+  {
+    "name": "notify",
+    "description": "Send a desktop notification",
+    "command": "notify-send",
+    "arguments": ["{title}", "{message}"],
+    "parameters": [
+      {
+        "name": "title",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "message",
+        "type": "string",
+        "required": false,
+        "default": ""
+      }
+    ],
+    "timeout_ms": 3000,
+    "read_only": false,
+    "category": "desktop"
+  },
+  {
+    "name": "clipboard-read",
+    "description": "Read text from the Wayland clipboard",
+    "command": "wl-paste",
+    "arguments": [],
+    "parameters": [],
+    "timeout_ms": 3000,
+    "read_only": true,
+    "category": "desktop"
+  },
+  {
+    "name": "clipboard-write",
+    "description": "Write text to the Wayland clipboard",
+    "command": "wl-copy",
+    "arguments": ["{text}"],
+    "parameters": [
+      {
+        "name": "text",
+        "type": "string",
+        "required": true
+      }
+    ],
+    "timeout_ms": 3000,
+    "read_only": false,
+    "category": "desktop"
+  },
+  {
+    "name": "open-url",
+    "description": "Open a URL with the default desktop application",
+    "command": "xdg-open",
+    "arguments": ["{url}"],
+    "parameters": [
+      {
+        "name": "url",
+        "type": "string",
+        "required": true
+      }
+    ],
+    "timeout_ms": 3000,
+    "read_only": false,
+    "category": "desktop"
+  },
+  {
+    "name": "open-file",
+    "description": "Open an absolute file or directory path with the default desktop application",
+    "command": "xdg-open",
+    "arguments": ["{path}"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "timeout_ms": 3000,
+    "read_only": false,
+    "category": "desktop"
+  },
+  {
+    "name": "git-status",
+    "description": "Show short git status for a repository",
+    "command": "git",
+    "arguments": ["status", "--short"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "working_directory": "{path}",
+    "timeout_ms": 5000,
+    "read_only": true,
+    "category": "git"
+  },
+  {
+    "name": "git-diff",
+    "description": "Show unstaged git diff for a repository",
+    "command": "git",
+    "arguments": ["diff"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "working_directory": "{path}",
+    "timeout_ms": 10000,
+    "read_only": true,
+    "category": "git"
+  },
+  {
+    "name": "git-diff-staged",
+    "description": "Show staged git diff for a repository",
+    "command": "git",
+    "arguments": ["diff", "--staged"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "working_directory": "{path}",
+    "timeout_ms": 10000,
+    "read_only": true,
+    "category": "git"
+  },
+  {
+    "name": "git-recent-commits",
+    "description": "Show recent commits for a repository",
+    "command": "git",
+    "arguments": ["log", "--oneline", "-n", "{count}"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      },
+      {
+        "name": "count",
+        "type": "integer",
+        "required": false,
+        "default": 10
+      }
+    ],
+    "working_directory": "{path}",
+    "timeout_ms": 5000,
+    "read_only": true,
+    "category": "git"
+  },
+  {
+    "name": "repo-tree",
+    "description": "Show a compact directory tree for a project",
+    "command": "tree",
+    "arguments": [
+      "-L",
+      "{depth}",
+      "-a",
+      "-I",
+      "target|.git|node_modules",
+      "{path}"
+    ],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      },
+      {
+        "name": "depth",
+        "type": "integer",
+        "required": false,
+        "default": 3
+      }
+    ],
+    "timeout_ms": 10000,
+    "read_only": true,
+    "category": "dev"
+  },
+  {
+    "name": "search-text",
+    "description": "Search text in an absolute directory using ripgrep",
+    "command": "rg",
+    "arguments": [
+      "--line-number",
+      "--hidden",
+      "--glob",
+      "!target",
+      "--glob",
+      "!.git",
+      "--glob",
+      "!node_modules",
+      "{query}",
+      "{path}"
+    ],
+    "parameters": [
+      {
+        "name": "query",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "timeout_ms": 15000,
+    "read_only": true,
+    "category": "dev"
+  },
+  {
+    "name": "cargo-check",
+    "description": "Run cargo check in a Rust project",
+    "command": "cargo",
+    "arguments": ["check"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "working_directory": "{path}",
+    "timeout_ms": 60000,
+    "read_only": true,
+    "category": "rust"
+  },
+  {
+    "name": "cargo-test",
+    "description": "Run cargo test in a Rust project",
+    "command": "cargo",
+    "arguments": ["test"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "working_directory": "{path}",
+    "timeout_ms": 120000,
+    "read_only": true,
+    "category": "rust"
+  },
+  {
+    "name": "cargo-clippy",
+    "description": "Run cargo clippy in a Rust project",
+    "command": "cargo",
+    "arguments": ["clippy"],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "working_directory": "{path}",
+    "timeout_ms": 120000,
+    "read_only": true,
+    "category": "rust"
+  },
+  {
+    "name": "open-project-in-nvim",
+    "description": "Open an absolute project path in Neovim inside Alacritty",
+    "command": "alacritty",
+    "arguments": ["--working-directory", "{path}", "-e", "nvim", "."],
+    "parameters": [
+      {
+        "name": "path",
+        "type": "path",
+        "required": true
+      }
+    ],
+    "timeout_ms": 3000,
+    "read_only": false,
+    "category": "desktop"
+  }
+]
